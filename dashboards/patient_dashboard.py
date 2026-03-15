@@ -1,5 +1,11 @@
-# dashboards/patient_dashboard.py
 import streamlit as st
+import pandas as pd
+from components.sidebar import sidebar
+from components.charts import patient_line_chart, appointment_donut_chart
+from src.database import init_db, get_all_patients, add_patient, update_patient, delete_patient
+
+# Initialize database
+init_db()
 from components.sidebar import sidebar
 from components.charts import patient_line_chart, appointment_donut_chart
 
@@ -23,14 +29,15 @@ CATEGORIES = {
         "title": "Symptom-Disease Diagnosis Support",
         "description": "AI-powered symptom analysis and disease diagnosis support systems",
         "icon": "🔬",
-        "stats": {"total": "89,400", "alerts": "8", "modules": "6"},
+        "stats": {"total": "89,400", "alerts": "8", "modules": "7"},
         "modules": [
             ("B1", "Symptom-Disease Mapping Database", "Comprehensive symptom database", 8, 25000),
             ("B2", "Fever-Based Differential Diagnosis System", "Fever pattern analysis", 4, 12000),
             ("B3", "Respiratory Symptom Diagnosis Database", "Respiratory condition database", 6, 15400),
             ("B4", "Gastrointestinal Disorder Diagnosis Support", "GI symptom analysis", 5, 10800),
             ("B5", "Neurological Symptom Analysis Database", "Neural condition tracking", 7, 14200),
-            ("B6", "Rule-Based Disease Ranking System", "Disease probability system", 3, 12000)
+            ("B6", "Rule-Based Disease Ranking System", "Disease probability system", 3, 12000),
+            ("B7", "Symptom-Disease Mapping Database", "Map symptoms to possible diseases for differential diagnosis", 5, 8500)
         ]
     },
     "C - Clinical Query Copilot": {
@@ -391,12 +398,81 @@ def show_module_detail():
         st.image("https://via.placeholder.com/900x500?text=ER+Diagram+for+" + code)
     
     elif tab == "📋 Tables":
-        st.markdown("### Database Tables")
-        st.table({
-            "Table Name": ["patients", "insurance", "emergency_contacts", "admissions", "visit_history"],
-            "Records": [12500, 8900, 6400, 15200, 22100],
-            "Status": ["✅ Active", "✅ Active", "✅ Active", "✅ Active", "✅ Active"]
-        })
+        st.markdown("### Database Tables (CRUD Demo)")
+        
+        # CRUD Implementation
+        st.subheader("1. Read (View Data)")
+        df = get_all_patients()
+        
+        if df.empty:
+            st.info("No patients found in the database. Please add some!")
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            
+        st.divider()
+        
+        # Layout for Create, Update, Delete
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("2. Create (Add New)")
+            with st.form("add_patient_form", clear_on_submit=True):
+                new_name = st.text_input("Name")
+                new_age = st.number_input("Age", min_value=0, max_value=120, step=1, value=30)
+                new_disease = st.text_input("Disease / Condition")
+                submitted = st.form_submit_button("Add Patient")
+                
+                if submitted:
+                    if new_name and new_disease:
+                        add_patient(new_name, new_age, new_disease)
+                        st.success(f"Added patient: {new_name}")
+                        st.rerun()
+                    else:
+                        st.error("Name and Disease are required fields.")
+                        
+            st.subheader("4. Delete (Remove)")
+            if not df.empty:
+                with st.form("delete_patient_form"):
+                    # Create a dictionary for easy mapping in the selectbox
+                    patient_dict = {row['id']: f"{row['id']} - {row['name']}" for _, row in df.iterrows()}
+                    selected_id = st.selectbox("Select Patient to Delete", options=list(patient_dict.keys()), format_func=lambda x: patient_dict[x])
+                    
+                    delete_submitted = st.form_submit_button("Delete Patient", type="primary")
+                    
+                    if delete_submitted:
+                        delete_patient(selected_id)
+                        st.warning(f"Deleted patient ID: {selected_id}")
+                        st.rerun()
+            else:
+                st.info("No data available to delete.")
+                        
+        with col2:
+            st.subheader("3. Update (Modify Existing)")
+            if not df.empty:
+                # Select patient to update outside the form to populate default values safely
+                patient_dict = {row['id']: f"{row['id']} - {row['name']}" for _, row in df.iterrows()}
+                update_id = st.selectbox("Select Patient to Update", options=list(patient_dict.keys()), format_func=lambda x: patient_dict[x], key="update_select")
+                
+                # Get current values for the selected patient
+                current_patient = df[df['id'] == update_id].iloc[0]
+                
+                with st.form("update_patient_form"):
+                    upd_name = st.text_input("Name", value=current_patient['name'])
+                    upd_age = st.number_input("Age", min_value=0, max_value=120, step=1, value=int(current_patient['age']))
+                    upd_disease = st.text_input("Disease / Condition", value=current_patient['disease'])
+                    upd_status = st.selectbox("Status", ["active", "discharged", "inactive"], index=["active", "discharged", "inactive"].index(current_patient['status']) if current_patient['status'] in ["active", "discharged", "inactive"] else 0)
+                    
+                    update_submitted = st.form_submit_button("Update Patient")
+                    
+                    if update_submitted:
+                        if upd_name and upd_disease:
+                            update_patient(update_id, upd_name, upd_age, upd_disease, upd_status)
+                            st.success(f"Updated patient ID: {update_id}")
+                            st.rerun()
+                        else:
+                            st.error("Name and Disease are required fields.")
+            else:
+                 st.info("No data available to update.")
     
     elif tab == "🔍 SQL Query":
         st.markdown("### Sample SQL Queries")
