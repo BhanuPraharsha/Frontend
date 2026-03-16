@@ -35,12 +35,13 @@ if not test_connection():
 cols = get_collections()
 
 # tabs
-tab_home, tab_symptoms, tab_diseases, tab_assoc, tab_rules = st.tabs([
+tab_home, tab_symptoms, tab_diseases, tab_assoc, tab_rules, tab_engine = st.tabs([
     " Home",
     " Symptoms",
     " Diseases",
     " Associations",
     " Diagnosis Rules",
+    " Diagnostic Engine",
 ])
 
 # HOME
@@ -179,3 +180,87 @@ with tab_rules:
         st.caption(f"**{len(df)}** rules · sorted by priority")
     else:
         st.warning("No data. Run `python data/populate_all.py` first.")
+
+# DIAGNOSTIC ENGINE
+with tab_engine:
+    st.markdown("### 🧠 Bayesian Diagnostic Engine")
+    st.caption("Generate a Differential Diagnosis based on Posterior Probability.")
+    
+    # 1. Fetch available symptoms for multi-select
+    all_symptoms = list(cols["symptoms"].find({}, {"_id": 0, "symptom_id": 1, "symptom_name": 1}))
+    sym_name_to_id = {s["symptom_name"]: s["symptom_id"] for s in all_symptoms}
+    
+    # 2. UI for symptom selection
+    selected_symptom_names = st.multiselect(
+        "Select Patient Symptoms (Pattern Recognition & Combos):",
+        options=list(sym_name_to_id.keys()),
+        default=[]
+    )
+    
+    # Execute Button
+    if st.button("Generate Differential Diagnosis", type="primary"):
+        if not selected_symptom_names:
+            st.warning("Please select at least one symptom.")
+        else:
+            with st.spinner("Calculating Bayesian Posteriors..."):
+                from engine.differential_diagnosis import get_differential_diagnosis
+                
+                # Convert names back to IDs
+                symptom_ids = [sym_name_to_id[name] for name in selected_symptom_names]
+                
+                # Fetch results
+                results_df = get_differential_diagnosis(symptom_ids)
+                
+                if results_df.empty:
+                    st.info("No matching diseases found for this symptom combination.")
+                else:
+                    st.success(f"Generated {len(results_df)} potential diagnoses.")
+                    
+                    # Formatting the dataframe for display
+                    display_df = results_df[[
+                        "disease_name", "icd11_code", "match_percentage", 
+                        "prior_probability", "posterior_probability_pct"
+                    ]].rename(columns={
+                        "disease_name": "Disease",
+                        "icd11_code": "ICD-11 Code",
+                        "match_percentage": "Symptom Match (%)",
+                        "prior_probability": "Prevalence",
+                        "posterior_probability_pct": "Posterior Probability (%)"
+                    })
+                    
+                    st.dataframe(
+                        display_df,
+                        column_config={
+                            "Disease": st.column_config.TextColumn("Disease", width="large"),
+                            "ICD-11 Code": st.column_config.TextColumn("ICD-11", width="small"),
+                            "Symptom Match (%)": st.column_config.ProgressColumn(
+                                "Symptom Match",
+                                help="Percentage of selected symptoms matching this disease",
+                                format="%f%%",
+                                min_value=0,
+                                max_value=100,
+                            ),
+                            "Prevalence": st.column_config.NumberColumn(
+                                "Prevalence Ratio",
+                                help="Baseline Probability in Population",
+                                format="%.4f"
+                            ),
+                            "Posterior Probability (%)": st.column_config.NumberColumn(
+                                "Posterior Probability",
+                                help="Calculated Bayesian Probability",
+                                format="%.2f%%"
+                            ),
+                        },
+                        use_container_width=True, 
+                        height=500,
+                        hide_index=True
+                    )
+                    
+                    # Explain calculations
+                    st.markdown("---")
+                    st.markdown("##### 🧮 How it works:")
+                    st.markdown("""
+                    - **Prior Probability**: Baseline disease prevalence in general population.
+                    - **Likelihood Ratio (LR+)**: Mathematical derivation from clinical finding Sensitivity / (1 - Specificity).
+                    - **Posterior Probability**: Final Bayesian calculation multiplying Prior ODDs by combined LR+ of selected symptoms.
+                    """)
