@@ -24,14 +24,13 @@ CATEGORIES = {
         "title": "Laboratory Management",
         "description": "Lab tests, results, equipment, and sample tracking",
         "icon": "🧪",
-        "stats": {"modules": "6", "records": "12,840", "alerts": "5"},
+        "stats": {"modules": "5", "records": "12,840", "alerts": "5"},
         "modules": [
             ("B1", "Laboratory Test Management", "Test ordering system", 9, 22300),
             ("B2", "Automated Lab Result Interpretation", "AI result analysis", 6, 15800),
             ("B3", "Reference Range Validation", "Normal range database", 4, 12400),
             ("B4", "Follow-Up Test Recommendation", "Test suggestion system", 5, 9100),
-            ("B5", "Pathology Report Management", "Pathology database", 7, 11200),
-            ("B6", "Symptom-Disease Mapping Database", "Map symptoms to possible diseases for differential diagnosis", 5, 8500)
+            ("B5", "Pathology Report Management", "Pathology database", 7, 11200)
         ]
     },
     "C - Pharmacy & Medications": {
