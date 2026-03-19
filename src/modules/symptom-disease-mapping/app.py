@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 import requests
 
-API_BASE = "http://127.0.0.1:8000"
+API_BASE = st.secrets.get("API_BASE", "http://127.0.0.1:8000")
 
 
 def api(method: str, path: str, **kwargs):
