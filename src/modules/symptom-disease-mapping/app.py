@@ -1,10 +1,23 @@
 """
 Module M7: Symptom–Disease Mapping Database
+Streamlit frontend – calls the FastAPI backend (api/main.py) via HTTP.
+Start the backend first: uvicorn api.main:app --reload
+Then start this:        streamlit run app.py
 """
 
 import streamlit as st
 import pandas as pd
-from database.connection import get_collections, test_connection
+import requests
+
+API_BASE = "http://127.0.0.1:8000"
+
+
+def api(method: str, path: str, **kwargs):
+    url = f"{API_BASE}{path}"
+    resp = getattr(requests, method)(url, **kwargs)
+    resp.raise_for_status()
+    return resp.json()
+
 
 st.set_page_config(
     page_title="M7 – Symptom–Disease Mapping",
@@ -12,7 +25,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# styling
 st.markdown("""
 <style>
     .main-title { font-size:2rem; font-weight:700; color:#1e3a5f; }
@@ -26,14 +38,16 @@ st.markdown('<div class="main-title">🏥 Module M7: Symptom–Disease Mapping D
 st.markdown('<div class="sub-title">Category B · IIT(ISM) DBMS Project 2025–26</div>', unsafe_allow_html=True)
 st.markdown("---")
 
-# DB connection
-if not test_connection():
-    st.error(" MongoDB connection failed. Check `.streamlit/secrets.toml`.")
+try:
+    api("get", "/health")
+except Exception:
+    st.error(
+        "⚠️ Cannot reach the FastAPI backend at `http://127.0.0.1:8000`. "
+        "Start it with: `uvicorn api.main:app --reload`"
+    )
     st.stop()
 
-cols = get_collections()
-
-# tabs
+# Tabs
 tab_home, tab_symptoms, tab_diseases, tab_assoc, tab_rules, tab_engine, tab_queries, tab_crud = st.tabs([
     " Home",
     " Symptoms",
@@ -77,29 +91,27 @@ with tab_home:
 
     with col2:
         st.markdown("###  Live Stats")
-        for label, key in [
-            ("Symptoms",     "symptoms"),
-            ("Diseases",     "diseases"),
-            ("Associations", "symptom_disease_associations"),
-            ("Rules",        "diagnosis_rules"),
-        ]:
-            st.metric(label, cols[key].count_documents({}))
+        try:
+            stats = api("get", "/stats")
+            st.metric("Symptoms",     stats["symptoms"])
+            st.metric("Diseases",     stats["diseases"])
+            st.metric("Associations", stats["associations"])
+            st.metric("Rules",        stats["diagnosis_rules"])
+        except Exception as e:
+            st.error(f"Could not load stats: {e}")
 
 # SYMPTOMS
 with tab_symptoms:
     st.markdown("###  Symptoms Collection")
     st.caption("Source: SNOMED-CT International Edition")
 
-    data = list(cols["symptoms"].find({}, {"_id": 0}))
+    data = api("get", "/symptoms")
     if data:
         df = pd.DataFrame(data)
-
-        # Filter by body system
         systems = ["All"] + sorted(df["body_system"].unique().tolist())
         selected = st.selectbox("Filter by body system", systems)
         if selected != "All":
             df = df[df["body_system"] == selected]
-
         st.dataframe(df, use_container_width=True, height=420)
         st.caption(f"Showing **{len(df)}** of **{len(data)}** symptoms")
     else:
@@ -110,13 +122,12 @@ with tab_diseases:
     st.markdown("###  Diseases Collection")
     st.caption("Source: ICD-11 MMS 2024-01 (WHO)")
 
-    data = list(cols["diseases"].find({}, {"_id": 0}))
+    data = api("get", "/diseases")
     if data:
-        df = pd.DataFrame(data).sort_values("prevalence_rate", ascending=False)
+        df = pd.DataFrame(data)
         st.dataframe(df, use_container_width=True, height=420)
         st.caption(f"**{len(df)}** diseases · sorted by prevalence rate (descending)")
 
-        # Simple bar chart
         st.markdown("##### Prevalence Rate")
         st.bar_chart(df.set_index("disease_name")["prevalence_rate"])
     else:
@@ -127,25 +138,13 @@ with tab_assoc:
     st.markdown("###  Symptom–Disease Associations")
     st.caption("Sensitivity · Specificity · Likelihood Ratios from peer-reviewed clinical literature")
 
-    data = list(cols["symptom_disease_associations"].find({}, {"_id": 0}))
+    data = api("get", "/associations")
     if data:
         df = pd.DataFrame(data)
-
-        # Enrich with names
-        sym_map = {s["symptom_id"]: s["symptom_name"]
-                   for s in cols["symptoms"].find({}, {"_id": 0})}
-        dis_map = {d["disease_id"]: d["disease_name"]
-                   for d in cols["diseases"].find({}, {"_id": 0})}
-
-        df.insert(1, "symptom_name", df["symptom_id"].map(sym_map))
-        df.insert(3, "disease_name", df["disease_id"].map(dis_map))
-
-        # Filter by disease
-        diseases = ["All"] + sorted(dis_map.values())
-        selected = st.selectbox("Filter by disease", diseases)
+        all_disease_names = ["All"] + sorted(df["disease_name"].dropna().unique().tolist())
+        selected = st.selectbox("Filter by disease", all_disease_names)
         if selected != "All":
             df = df[df["disease_name"] == selected]
-
         st.dataframe(df, use_container_width=True, height=420)
         st.caption(f"Showing **{len(df)}** associations")
     else:
@@ -156,27 +155,19 @@ with tab_rules:
     st.markdown("###  Diagnosis Rules Collection")
     st.caption("Rule-based inference engine data — clinical decision criteria")
 
-    data = list(cols["diagnosis_rules"].find({}, {"_id": 0}))
+    data = api("get", "/diagnosis-rules")
     if data:
-        dis_map = {d["disease_id"]: d["disease_name"]
-                   for d in cols["diseases"].find({}, {"_id": 0})}
-        sym_map = {s["symptom_id"]: s["symptom_name"]
-                   for s in cols["symptoms"].find({}, {"_id": 0})}
-
-        # Build display-friendly rows
         rows = []
         for r in data:
-            sym_names = [sym_map.get(sid, sid) for sid in r["symptom_combination"]]
             rows.append({
-                "rule_id":            r["rule_id"],
-                "rule_name":          r["rule_name"],
-                "symptom_combination": ", ".join(sym_names),
-                "suggested_disease":  dis_map.get(r["suggested_disease_id"], r["suggested_disease_id"]),
+                "rule_id":             r["rule_id"],
+                "rule_name":           r["rule_name"],
+                "symptom_combination": ", ".join(r["symptom_combination"]),
+                "suggested_disease":   r["suggested_disease"],
                 "confidence_modifier": r["confidence_modifier"],
-                "priority":           r["priority"],
+                "priority":            r["priority"],
             })
-
-        df = pd.DataFrame(rows).sort_values("priority")
+        df = pd.DataFrame(rows)
         st.dataframe(df, use_container_width=True, height=450)
         st.caption(f"**{len(df)}** rules · sorted by priority")
     else:
@@ -186,93 +177,83 @@ with tab_rules:
 with tab_engine:
     st.markdown("### 🧠 Bayesian Diagnostic Engine")
     st.caption("Generate a Differential Diagnosis based on Posterior Probability.")
-    
-    # 1. Fetch available symptoms for multi-select
-    all_symptoms = list(cols["symptoms"].find({}, {"_id": 0, "symptom_id": 1, "symptom_name": 1}))
+
+    # Fetch symptom list for the multi-select
+    all_symptoms = api("get", "/symptoms")
     sym_name_to_id = {s["symptom_name"]: s["symptom_id"] for s in all_symptoms}
-    
-    # 2. UI for symptom selection
+
     selected_symptom_names = st.multiselect(
         "Select Patient Symptoms (Pattern Recognition & Combos):",
         options=list(sym_name_to_id.keys()),
-        default=[]
+        default=[],
     )
-    
-    # Execute Button
+
     if st.button("Generate Differential Diagnosis", type="primary"):
         if not selected_symptom_names:
             st.warning("Please select at least one symptom.")
         else:
             with st.spinner("Calculating Bayesian Posteriors..."):
-                from engine.differential_diagnosis import get_differential_diagnosis
-                
-                # Convert names back to IDs
                 symptom_ids = [sym_name_to_id[name] for name in selected_symptom_names]
-                
-                # Fetch results
-                results_df = get_differential_diagnosis(symptom_ids)
-                
-                if results_df.empty:
-                    st.info("No matching diseases found for this symptom combination.")
-                else:
-                    st.success(f"Generated {len(results_df)} potential diagnoses.")
-                    
-                    # Formatting the dataframe for display
-                    display_df = results_df[[
-                        "disease_name", "icd11_code", "match_percentage", 
-                        "prior_probability", "posterior_probability_pct"
-                    ]].rename(columns={
-                        "disease_name": "Disease",
-                        "icd11_code": "ICD-11 Code",
-                        "match_percentage": "Symptom Match (%)",
-                        "prior_probability": "Prevalence",
-                        "posterior_probability_pct": "Posterior Probability (%)"
-                    })
-                    
-                    st.dataframe(
-                        display_df,
-                        column_config={
-                            "Disease": st.column_config.TextColumn("Disease", width="large"),
-                            "ICD-11 Code": st.column_config.TextColumn("ICD-11", width="small"),
-                            "Symptom Match (%)": st.column_config.ProgressColumn(
-                                "Symptom Match",
-                                help="Percentage of selected symptoms matching this disease",
-                                format="%f%%",
-                                min_value=0,
-                                max_value=100,
-                            ),
-                            "Prevalence": st.column_config.NumberColumn(
-                                "Prevalence Ratio",
-                                help="Baseline Probability in Population",
-                                format="%.4f"
-                            ),
-                            "Posterior Probability (%)": st.column_config.NumberColumn(
-                                "Posterior Probability",
-                                help="Calculated Bayesian Probability",
-                                format="%.2f%%"
-                            ),
-                        },
-                        use_container_width=True, 
-                        height=500,
-                        hide_index=True
-                    )
-                    
-                    # Explain calculations
-                    st.markdown("---")
-                    st.markdown("##### 🧮 How it works:")
-                    st.markdown("""
-                    - **Prior Probability**: Baseline disease prevalence in general population.
-                    - **Likelihood Ratio (LR+)**: Mathematical derivation from clinical finding Sensitivity / (1 - Specificity).
-                    - **Posterior Probability**: Final Bayesian calculation multiplying Prior ODDs by combined LR+ of selected symptoms.
-                    """)
+                results = api("post", "/engine/differential-diagnosis",
+                              json={"symptom_ids": symptom_ids})
+
+            if not results:
+                st.info("No matching diseases found for this symptom combination.")
+            else:
+                results_df = pd.DataFrame(results)
+                st.success(f"Generated {len(results_df)} potential diagnoses.")
+
+                display_df = results_df[[
+                    "disease_name", "icd11_code", "match_percentage",
+                    "prior_probability", "posterior_probability_pct",
+                ]].rename(columns={
+                    "disease_name":            "Disease",
+                    "icd11_code":              "ICD-11 Code",
+                    "match_percentage":        "Symptom Match (%)",
+                    "prior_probability":       "Prevalence",
+                    "posterior_probability_pct": "Posterior Probability (%)",
+                })
+
+                st.dataframe(
+                    display_df,
+                    column_config={
+                        "Disease": st.column_config.TextColumn("Disease", width="large"),
+                        "ICD-11 Code": st.column_config.TextColumn("ICD-11", width="small"),
+                        "Symptom Match (%)": st.column_config.ProgressColumn(
+                            "Symptom Match",
+                            help="Percentage of selected symptoms matching this disease",
+                            format="%f%%",
+                            min_value=0,
+                            max_value=100,
+                        ),
+                        "Prevalence": st.column_config.NumberColumn(
+                            "Prevalence Ratio",
+                            help="Baseline Probability in Population",
+                            format="%.4f",
+                        ),
+                        "Posterior Probability (%)": st.column_config.NumberColumn(
+                            "Posterior Probability",
+                            help="Calculated Bayesian Probability",
+                            format="%.2f%%",
+                        ),
+                    },
+                    use_container_width=True,
+                    height=500,
+                    hide_index=True,
+                )
+
+                st.markdown("---")
+                st.markdown("##### 🧮 How it works:")
+                st.markdown("""
+                - **Prior Probability**: Baseline disease prevalence in general population.
+                - **Likelihood Ratio (LR+)**: Mathematical derivation from clinical finding Sensitivity / (1 - Specificity).
+                - **Posterior Probability**: Final Bayesian calculation multiplying Prior ODDs by combined LR+ of selected symptoms.
+                """)
+
 # SQL QUERIES
 with tab_queries:
     st.markdown("###  SQL Queries & Output")
     st.caption("MongoDB aggregation pipelines — equivalent SQL shown for each query")
-
-    # shared lookup maps
-    sym_map = {s["symptom_id"]: s["symptom_name"] for s in cols["symptoms"].find({}, {"_id": 0})}
-    dis_map = {d["disease_id"]: d["disease_name"] for d in cols["diseases"].find({}, {"_id": 0})}
 
     QUERIES = [
         "Q1 – Top diseases by number of associated symptoms",
@@ -318,6 +299,15 @@ FROM diagnosis_rules
 ORDER BY confidence_modifier DESC;""",
     }
 
+    # Map query label → API endpoint path
+    QUERY_ENDPOINTS = {
+        QUERIES[0]: "/queries/top-diseases-by-symptoms",
+        QUERIES[1]: "/queries/high-sensitivity-symptoms",
+        QUERIES[2]: "/queries/diseases-by-prevalence",
+        QUERIES[3]: "/queries/associations-by-body-system",
+        QUERIES[4]: "/queries/top-rules-by-confidence",
+    }
+
     chosen = st.selectbox("Choose a query", QUERIES)
 
     col_q, col_s = st.columns([1, 1])
@@ -328,60 +318,7 @@ ORDER BY confidence_modifier DESC;""",
     with col_q:
         st.markdown("**MongoDB Result**")
         if st.button("Run Query"):
-            if chosen == QUERIES[0]:
-                pipeline = [
-                    {"$group": {"_id": "$disease_id", "symptom_count": {"$sum": 1}}},
-                    {"$sort": {"symptom_count": -1}},
-                    {"$project": {"_id": 0,
-                                  "disease_name": {"$literal": ""},   # placeholder
-                                  "disease_id": "$_id",
-                                  "symptom_count": 1}},
-                ]
-                raw = list(cols["symptom_disease_associations"].aggregate([
-                    {"$group": {"_id": "$disease_id", "symptom_count": {"$sum": 1}}},
-                    {"$sort": {"symptom_count": -1}},
-                ]))
-                rows = [{"disease_name": dis_map.get(r["_id"], r["_id"]),
-                         "symptom_count": r["symptom_count"]} for r in raw]
-
-            elif chosen == QUERIES[1]:
-                raw = list(cols["symptom_disease_associations"].find(
-                    {"sensitivity": {"$gte": 0.85}}, {"_id": 0}))
-                rows = [{"symptom_name": sym_map.get(r["symptom_id"], r["symptom_id"]),
-                         "disease_name": dis_map.get(r["disease_id"], r["disease_id"]),
-                         "sensitivity":  r["sensitivity"],
-                         "specificity":  r["specificity"]} for r in raw]
-                rows.sort(key=lambda x: -x["sensitivity"])
-
-            elif chosen == QUERIES[2]:
-                rows = list(cols["diseases"].find(
-                    {}, {"_id": 0, "disease_name": 1, "icd11_code": 1, "prevalence_rate": 1}
-                ).sort("prevalence_rate", -1))
-
-            elif chosen == QUERIES[3]:
-                pipeline = [
-                    {"$lookup": {"from": "symptoms", "localField": "symptom_id",
-                                 "foreignField": "symptom_id", "as": "sym"}},
-                    {"$unwind": "$sym"},
-                    {"$group": {"_id": "$sym.body_system",
-                                "association_count": {"$sum": 1},
-                                "avg_strength": {"$avg": "$association_strength"}}},
-                    {"$sort": {"association_count": -1}},
-                    {"$project": {"_id": 0,
-                                  "body_system":       "$_id",
-                                  "association_count": 1,
-                                  "avg_strength":      {"$round": ["$avg_strength", 3]}}},
-                ]
-                rows = list(cols["symptom_disease_associations"].aggregate(pipeline))
-
-            elif chosen == QUERIES[4]:
-                raw = list(cols["diagnosis_rules"].find(
-                    {}, {"_id": 0}).sort("confidence_modifier", -1))
-                rows = [{"rule_name":          r["rule_name"],
-                         "suggested_disease":  dis_map.get(r["suggested_disease_id"], r["suggested_disease_id"]),
-                         "confidence_modifier": r["confidence_modifier"],
-                         "priority":           r["priority"]} for r in raw]
-
+            rows = api("get", QUERY_ENDPOINTS[chosen])
             if rows:
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, height=340)
                 st.caption(f"{len(rows)} rows returned")
@@ -389,7 +326,6 @@ ORDER BY confidence_modifier DESC;""",
                 st.info("No results.")
         else:
             st.info("Press **Run Query** to see results.")
-
 
 # CRUD OPERATIONS
 with tab_crud:
@@ -400,6 +336,7 @@ with tab_crud:
 
     st.markdown("---")
 
+    # Symptoms CRUD
     if entity == " Symptoms":
         col_add, col_del, col_upd = st.columns(3)
 
@@ -411,10 +348,8 @@ with tab_crud:
             new_body = st.text_input("body_system",   placeholder="e.g. Systemic",  key="s_add_body")
             if st.button("Insert", key="s_insert"):
                 if new_id and new_code and new_name and new_body:
-                    if cols["symptoms"].find_one({"symptom_id": new_id}):
-                        st.error(f"symptom_id `{new_id}` already exists.")
-                    else:
-                        cols["symptoms"].insert_one({
+                    try:
+                        api("post", "/symptoms", json={
                             "symptom_id":   new_id,
                             "symptom_code": new_code,
                             "symptom_name": new_name,
@@ -422,6 +357,9 @@ with tab_crud:
                         })
                         st.success(f"Inserted {new_id}")
                         st.rerun()
+                    except requests.HTTPError as e:
+                        detail = e.response.json().get("detail", str(e))
+                        st.error(detail)
                 else:
                     st.error("All fields are required.")
 
@@ -430,12 +368,13 @@ with tab_crud:
             del_id = st.text_input("symptom_id to delete", placeholder="S021", key="s_del_id")
             if st.button("Delete", key="s_delete", type="primary"):
                 if del_id:
-                    res = cols["symptoms"].delete_one({"symptom_id": del_id})
-                    if res.deleted_count:
+                    try:
+                        api("delete", f"/symptoms/{del_id}")
                         st.success(f"Deleted {del_id}")
                         st.rerun()
-                    else:
-                        st.error("ID not found.")
+                    except requests.HTTPError as e:
+                        detail = e.response.json().get("detail", str(e))
+                        st.error(detail)
 
         with col_upd:
             st.markdown("#### Update Symptom Name")
@@ -443,44 +382,44 @@ with tab_crud:
             upd_name = st.text_input("New symptom_name",     placeholder="New name", key="s_upd_name")
             if st.button("Update", key="s_update"):
                 if upd_id and upd_name:
-                    res = cols["symptoms"].update_one(
-                        {"symptom_id": upd_id},
-                        {"$set": {"symptom_name": upd_name}}
-                    )
-                    if res.matched_count:
+                    try:
+                        api("put", f"/symptoms/{upd_id}", json={"symptom_name": upd_name})
                         st.success(f"Updated {upd_id}")
                         st.rerun()
-                    else:
-                        st.error("ID not found.")
+                    except requests.HTTPError as e:
+                        detail = e.response.json().get("detail", str(e))
+                        st.error(detail)
 
         st.markdown("---")
         st.markdown("#### Current Symptoms")
-        data = list(cols["symptoms"].find({}, {"_id": 0}))
+        data = api("get", "/symptoms")
         st.dataframe(pd.DataFrame(data), use_container_width=True, height=350)
 
-    else:  # Diseases
+    # Diseases CRUD 
+    else:
         col_add, col_del, col_upd = st.columns(3)
 
         with col_add:
             st.markdown("#### Add Disease")
-            new_id   = st.text_input("disease_id",   placeholder="D013",       key="d_add_id")
-            new_code = st.text_input("icd11_code",    placeholder="e.g. 8B20",  key="d_add_code")
+            new_id   = st.text_input("disease_id",   placeholder="D013",        key="d_add_id")
+            new_code = st.text_input("icd11_code",    placeholder="e.g. 8B20",   key="d_add_code")
             new_name = st.text_input("disease_name",  placeholder="e.g. Malaria", key="d_add_name")
             new_prev = st.number_input("prevalence_rate", 0.0, 1.0, 0.01,
                                        step=0.001, format="%.3f", key="d_add_prev")
             if st.button("Insert", key="d_insert"):
                 if new_id and new_code and new_name:
-                    if cols["diseases"].find_one({"disease_id": new_id}):
-                        st.error(f"disease_id `{new_id}` already exists.")
-                    else:
-                        cols["diseases"].insert_one({
-                            "disease_id":      new_id,
-                            "icd11_code":      new_code,
-                            "disease_name":    new_name,
-                            "prevalence_rate": new_prev,
+                    try:
+                        api("post", "/diseases", json={
+                            "disease_id":       new_id,
+                            "icd11_code":       new_code,
+                            "disease_name":     new_name,
+                            "prevalence_rate":  new_prev,
                         })
                         st.success(f"Inserted {new_id}")
                         st.rerun()
+                    except requests.HTTPError as e:
+                        detail = e.response.json().get("detail", str(e))
+                        st.error(detail)
                 else:
                     st.error("All fields are required.")
 
@@ -489,12 +428,13 @@ with tab_crud:
             del_id = st.text_input("disease_id to delete", placeholder="D013", key="d_del_id")
             if st.button("Delete", key="d_delete", type="primary"):
                 if del_id:
-                    res = cols["diseases"].delete_one({"disease_id": del_id})
-                    if res.deleted_count:
+                    try:
+                        api("delete", f"/diseases/{del_id}")
                         st.success(f"Deleted {del_id}")
                         st.rerun()
-                    else:
-                        st.error("ID not found.")
+                    except requests.HTTPError as e:
+                        detail = e.response.json().get("detail", str(e))
+                        st.error(detail)
 
         with col_upd:
             st.markdown("#### Update Disease Name")
@@ -502,17 +442,15 @@ with tab_crud:
             upd_name = st.text_input("New disease_name",     placeholder="New name", key="d_upd_name")
             if st.button("Update", key="d_update"):
                 if upd_id and upd_name:
-                    res = cols["diseases"].update_one(
-                        {"disease_id": upd_id},
-                        {"$set": {"disease_name": upd_name}}
-                    )
-                    if res.matched_count:
+                    try:
+                        api("put", f"/diseases/{upd_id}", json={"disease_name": upd_name})
                         st.success(f"Updated {upd_id}")
                         st.rerun()
-                    else:
-                        st.error("ID not found.")
+                    except requests.HTTPError as e:
+                        detail = e.response.json().get("detail", str(e))
+                        st.error(detail)
 
         st.markdown("---")
         st.markdown("#### Current Diseases")
-        data = list(cols["diseases"].find({}, {"_id": 0}))
+        data = api("get", "/diseases")
         st.dataframe(pd.DataFrame(data), use_container_width=True, height=350)

@@ -23,11 +23,9 @@ def calculate_likelihood_ratios(sensitivity: float, specificity: float) -> tuple
     return lr_plus, lr_minus
 
 def odds_to_probability(odds: float) -> float:
-    """Convert odds to probability."""
     return odds / (1.0 + odds)
 
 def probability_to_odds(probability: float) -> float:
-    """Convert probability to odds."""
     prob = min(max(probability, 0.001), 0.999) # Prevent infinity
     return prob / (1.0 - prob)
 

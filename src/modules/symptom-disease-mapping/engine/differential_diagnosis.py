@@ -2,7 +2,6 @@ import pandas as pd
 from typing import List, Dict, Any
 from database.connection import get_collections
 
-# The path should be relative or absolute based on where it's executed
 from engine.probability_calc import (
     calculate_likelihood_ratios,
     calculate_posterior_probability
@@ -24,8 +23,7 @@ def get_differential_diagnosis(symptom_ids: List[str]) -> pd.DataFrame:
     if not symptom_ids:
         return pd.DataFrame()
         
-    # 1. Fetch all unique diseases associated with ANY of the inputted symptoms
-    # This acts as a filter (SQL equivalent: WHERE symptom_id IN (...))
+    # Fetch all unique diseases associated with ANY of the inputted symptoms
     associations_cursor = cols['symptom_disease_associations'].find({
         "symptom_id": {"$in": symptom_ids}
     })
@@ -46,7 +44,7 @@ def get_differential_diagnosis(symptom_ids: List[str]) -> pd.DataFrame:
             disease_assoc_map[did] = []
         disease_assoc_map[did].append(assoc)
         
-    # 2. Fetch required disease data (specifically prior probability aka prevalence rate)
+    # Fetch required disease data (specifically  prevalence rate)
     diseases_cursor = cols['diseases'].find({
         "disease_id": {"$in": list(disease_ids)}
     })
@@ -56,15 +54,13 @@ def get_differential_diagnosis(symptom_ids: List[str]) -> pd.DataFrame:
     
     results = []
     
-    # 3. Calculate posterior probability for each potential disease
+    # Calculate posterior probability for each potential disease
     for disease_id, assoc_list in disease_assoc_map.items():
         disease_info = disease_map.get(disease_id)
         if not disease_info:
             continue
             
         # Get prior probability (prevalence rate)
-        # Assuming prevalence rate is stored as a percentage or fraction
-        # Usually: 0.05 means 5% of population
         prior_prob = float(disease_info.get("prevalence_rate", 0.01))
         
         lr_plus_list = []
