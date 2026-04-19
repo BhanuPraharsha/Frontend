@@ -261,6 +261,7 @@ with tab_queries:
         "Q3 – Diseases sorted by prevalence rate",
         "Q4 – Associations grouped by body system",
         "Q5 – Rules with highest confidence modifier",
+        "Q6 – Set Intersection: Dynamic Symptom Match",
     ]
 
     SQL_EQUIV = {
@@ -297,6 +298,14 @@ ORDER BY association_count DESC;""",
 SELECT rule_name, suggested_disease_id, confidence_modifier, priority
 FROM diagnosis_rules
 ORDER BY confidence_modifier DESC;""",
+
+        "Q6 – Set Intersection: Dynamic Symptom Match": """\
+-- SET INTERSECTION: Find diseases associated with BOTH selected symptoms
+SELECT d.disease_name
+FROM symptom_disease_associations a1
+JOIN symptom_disease_associations a2 ON a1.disease_id = a2.disease_id
+JOIN diseases d ON a1.disease_id = d.disease_id
+WHERE a1.symptom_id = '<S1>' AND a2.symptom_id = '<S2>';""",
     }
 
     # Map query label → API endpoint path
@@ -306,6 +315,7 @@ ORDER BY confidence_modifier DESC;""",
         QUERIES[2]: "/queries/diseases-by-prevalence",
         QUERIES[3]: "/queries/associations-by-body-system",
         QUERIES[4]: "/queries/top-rules-by-confidence",
+        QUERIES[5]: "/queries/symptom-set-intersection",
     }
 
     chosen = st.selectbox("Choose a query", QUERIES)
@@ -317,15 +327,38 @@ ORDER BY confidence_modifier DESC;""",
 
     with col_q:
         st.markdown("**MongoDB Result**")
-        if st.button("Run Query"):
-            rows = api("get", QUERY_ENDPOINTS[chosen])
-            if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, height=340)
-                st.caption(f"{len(rows)} rows returned")
+        
+        if chosen == QUERIES[5]:
+            all_symptoms = api("get", "/symptoms")
+            if all_symptoms:
+                sym_map = {s["symptom_name"]: s["symptom_id"] for s in all_symptoms}
+                col_s1, col_s2 = st.columns(2)
+                with col_s1:
+                    s1_name = st.selectbox("Symptom 1", list(sym_map.keys()), index=0)
+                with col_s2:
+                    s2_name = st.selectbox("Symptom 2", list(sym_map.keys()), index=min(1, len(sym_map)-1))
+                    
+                if st.button("Run Query"):
+                    s1_id = sym_map[s1_name]
+                    s2_id = sym_map[s2_name]
+                    rows = api("get", f"{QUERY_ENDPOINTS[chosen]}?s1={s1_id}&s2={s2_id}")
+                    if rows:
+                        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=250)
+                        st.caption(f"{len(rows)} rows returned")
+                    else:
+                        st.info("No diseases found with BOTH symptoms.")
             else:
-                st.info("No results.")
+                st.warning("No symptoms found in DB.")
         else:
-            st.info("Press **Run Query** to see results.")
+            if st.button("Run Query"):
+                rows = api("get", QUERY_ENDPOINTS[chosen])
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, height=340)
+                    st.caption(f"{len(rows)} rows returned")
+                else:
+                    st.info("No results.")
+            else:
+                st.info("Press **Run Query** to see results.")
 
 # CRUD OPERATIONS
 with tab_crud:

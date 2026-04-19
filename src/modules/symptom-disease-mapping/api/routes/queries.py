@@ -103,3 +103,18 @@ def q5_top_rules_by_confidence():
         }
         for r in raw
     ]
+
+@router.get("/symptom-set-intersection", response_model=List[Dict[str, Any]])
+def get_set_intersection(s1: str = "S001", s2: str = "S003"):
+    """Find diseases that share a specific set of symptoms (Set Operation: Intersection)"""
+    cols = get_collections()
+    _, dis_map = _get_maps(cols)
+    
+    # We find diseases associated with BOTH s1 and s2
+    pipeline = [
+        {"$match": {"symptom_id": {"$in": [s1, s2]}}},
+        {"$group": {"_id": "$disease_id", "matched_symptoms": {"$addToSet": "$symptom_id"}}},
+        {"$match": {"matched_symptoms": {"$all": [s1, s2]}}} # This is the 'Intersection' part
+    ]
+    raw = list(cols["symptom_disease_associations"].aggregate(pipeline))
+    return [{"disease_name": dis_map.get(r["_id"], "Unknown"), "match": "Common Intersection"} for r in raw]
